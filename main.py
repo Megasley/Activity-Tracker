@@ -8,6 +8,7 @@ import time
 from requests.exceptions import ConnectionError
 import os
 from dotenv import load_dotenv
+import json
 
 # Load environment variables
 load_dotenv()
@@ -24,7 +25,11 @@ class StatusTracker(commands.Bot):
         
         # Initialize Google Sheets connection
         scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-        credentials = Credentials.from_service_account_file('credentials.json', scopes=scopes)
+        
+        # Get credentials from environment variable
+        credentials_dict = json.loads(os.getenv('GOOGLE_CREDENTIALS'))
+        credentials = Credentials.from_service_account_info(credentials_dict, scopes=scopes)
+        
         self.gclient = gspread.authorize(credentials)
         self.sheet = self.gclient.open_by_key(SHEET_ID)
         self.tracker_sheet = self.sheet.worksheet('Tracker')

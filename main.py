@@ -9,6 +9,7 @@ from requests.exceptions import ConnectionError
 import os
 from dotenv import load_dotenv
 import json
+from keep_alive import keep_alive
 
 # Load environment variables
 load_dotenv()
@@ -293,4 +294,5 @@ Raw Status: {member.raw_status}
 
 # Run the bot
 if __name__ == "__main__":
+    keep_alive()    # Start the keep alive server
     bot.run(DISCORD_TOKEN)

@@ -210,7 +210,7 @@ async def mystatus(ctx):
                 total_minutes += current_session_minutes
             
             formatted_time = bot.format_time(total_minutes)
-            await ctx.send(f"You've been online for {formatted_time} today!")
+            await ctx.send(f"You've been online for **{formatted_time}** today!")
             
         except gspread.CellNotFound:
             await ctx.send("No activity recorded yet!")
@@ -220,7 +220,7 @@ async def mystatus(ctx):
         await ctx.send("Error getting status!")
 
 @bot.command()
-async def testreport(ctx):
+async def teamreport(ctx):
     """Generate a status report immediately"""
     today = datetime.now().date().isoformat()
     
@@ -259,7 +259,7 @@ async def testreport(ctx):
         await ctx.send(report)
         
     except Exception as e:
-        print(f"Error in testreport: {e}")
+        print(f"Error in teamreport: {e}")
         await ctx.send("Error generating report!")
 
 @bot.command()

@@ -51,8 +51,41 @@ class StatusTracker(commands.Bot):
         
         # Set report time to 23:59
         self.report_time = time(hour=23, minute=59)
+        
+        # Add a flag to track if update is in progress
+        self.update_in_progress = False
 
-    def update_user_time(self, user_id, username, duration_minutes):
+    async def update_active_sessions(self):
+        """Update time for all active sessions"""
+        if self.update_in_progress:
+            return
+            
+        self.update_in_progress = True
+        try:
+            current_time = datetime.now()
+            
+            for user_id, start_time in list(self.active_sessions.items()):
+                try:
+                    # Find the user in the guild
+                    user = None
+                    for guild in self.guilds:
+                        user = guild.get_member(int(user_id))
+                        if user:
+                            break
+                    
+                    if user:
+                        duration_minutes = (current_time - start_time).total_seconds() / 60
+                        await self.update_user_time(user_id, user.name, duration_minutes)
+                        # Update the start time to current time
+                        self.active_sessions[user_id] = current_time
+                        print(f"Updated active session for {user.name}")
+                except Exception as e:
+                    print(f"Error updating session for user {user_id}: {str(e)}")
+                    
+        finally:
+            self.update_in_progress = False
+
+    async def update_user_time(self, user_id, username, duration_minutes):
         """Update or create user's total time for today"""
         today = datetime.now().date().isoformat()
         
@@ -110,6 +143,11 @@ class StatusTracker(commands.Bot):
             return f"{int(hours)}h {int(remaining_minutes)}m"
         return f"{int(remaining_minutes)}m"
 
+    @tasks.loop(minutes=5)
+    async def periodic_update(self):
+        """Update all active sessions every 5 minutes"""
+        await self.update_active_sessions()
+
     @tasks.loop(time=time(hour=23, minute=59))  # Run at 23:59 every day
     async def daily_report(self):
         if not REPORT_CHANNEL_ID:
@@ -150,6 +188,7 @@ class StatusTracker(commands.Bot):
     async def setup_hook(self):
         print(f"Logged in as {self.user}")
         self.daily_report.start()
+        self.periodic_update.start()  # Start the periodic update task
 
 # Create bot instance before event handlers
 bot = StatusTracker()
@@ -175,7 +214,7 @@ async def on_presence_update(before, after):
         if user_id in bot.active_sessions:
             start_time = bot.active_sessions[user_id]
             duration_minutes = (current_time - start_time).total_seconds() / 60
-            bot.update_user_time(user_id, username, duration_minutes)
+            await bot.update_user_time(user_id, username, duration_minutes)
             del bot.active_sessions[user_id]
 
 @bot.command()
@@ -210,7 +249,8 @@ async def mystatus(ctx):
                 total_minutes += current_session_minutes
             
             formatted_time = bot.format_time(total_minutes)
-            await ctx.send(f"You've been online for **{formatted_time}** today!")
+            member = ctx.author.id
+            await ctx.send(f"Hey <@{member}>! You've been online for **{formatted_time}** today!")
             
         except gspread.CellNotFound:
             await ctx.send("No activity recorded yet!")
@@ -254,7 +294,7 @@ async def teamreport(ctx):
                 
                 if minutes > 0:  # Only show users with activity
                     formatted_time = bot.format_time(minutes)
-                    report += f"<@{username}>: You spent **{formatted_time}** online today\n"
+                    report += f"<@{user_id}>: You spent **{formatted_time}** online today\n"
         
         await ctx.send(report)
         

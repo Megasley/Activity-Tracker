@@ -143,9 +143,9 @@ class StatusTracker(commands.Bot):
             return f"{int(hours)}h {int(remaining_minutes)}m"
         return f"{int(remaining_minutes)}m"
 
-    @tasks.loop(minutes=5)
+    @tasks.loop(minutes=1)
     async def periodic_update(self):
-        """Update all active sessions every 5 minutes"""
+        """Update all active sessions every 1 minutes"""
         await self.update_active_sessions()
 
     @tasks.loop(time=time(hour=23, minute=59))  # Run at 23:59 every day

@@ -1,10 +1,10 @@
 import discord
 from discord.ext import commands, tasks
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 import asyncio
 import gspread
 from google.oauth2.service_account import Credentials
-import time
+import time as time_module
 from requests.exceptions import ConnectionError
 import os
 from dotenv import load_dotenv
@@ -48,6 +48,9 @@ class StatusTracker(commands.Bot):
         self.active_sessions = {}
         self.max_retries = 3
         self.retry_delay = 2  # seconds
+        
+        # Set report time to 23:59
+        self.report_time = time(hour=23, minute=59)
 
     def update_user_time(self, user_id, username, duration_minutes):
         """Update or create user's total time for today"""
@@ -95,7 +98,7 @@ class StatusTracker(commands.Bot):
             except (ConnectionError, TimeoutError, Exception) as e:
                 if attempt < self.max_retries - 1:  # Don't sleep on last attempt
                     print(f"Attempt {attempt + 1} failed, retrying in {self.retry_delay} seconds...")
-                    time.sleep(self.retry_delay)
+                    time_module.sleep(self.retry_delay)
                 else:
                     print(f"Final attempt failed for {username}: {str(e)}")
 
@@ -107,7 +110,7 @@ class StatusTracker(commands.Bot):
             return f"{int(hours)}h {int(remaining_minutes)}m"
         return f"{int(remaining_minutes)}m"
 
-    @tasks.loop(hours=24)
+    @tasks.loop(time=time(hour=23, minute=59))  # Run at 23:59 every day
     async def daily_report(self):
         if not REPORT_CHANNEL_ID:
             return
@@ -138,6 +141,11 @@ class StatusTracker(commands.Bot):
             report += f"{user_data['username']}: {formatted_time}\n"
         
         await channel.send(report)
+
+    @daily_report.before_loop
+    async def before_daily_report(self):
+        """Wait until the bot is ready before starting the daily report loop"""
+        await self.wait_until_ready()
 
     async def setup_hook(self):
         print(f"Logged in as {self.user}")
@@ -246,38 +254,13 @@ async def testreport(ctx):
                 
                 if minutes > 0:  # Only show users with activity
                     formatted_time = bot.format_time(minutes)
-                    report += f"{username}: {formatted_time}\n"
+                    report += f"<@{username}>: You spent **{formatted_time}** online today\n"
         
         await ctx.send(report)
         
     except Exception as e:
         print(f"Error in testreport: {e}")
         await ctx.send("Error generating report!")
-
-@bot.command()
-async def sessions(ctx):
-    """Show all sessions for the user"""
-    user_id = str(ctx.author.id)
-    
-    if user_id not in bot.user_status:
-        await ctx.send("No status data available for you yet!")
-        return
-    
-    sessions = bot.user_status[user_id]['sessions']
-    if not sessions:
-        await ctx.send("No sessions recorded yet!")
-        return
-    
-    report = "**Your sessions today:**\n\n"
-    today = datetime.now().date()
-    
-    for session in sessions:
-        start = datetime.fromisoformat(session['start'])
-        if start.date() == today:
-            end = datetime.fromisoformat(session['end']) if session['end'] else "Still online"
-            report += f"Start: {start.strftime('%H:%M:%S')}, End: {end}\n"
-    
-    await ctx.send(report)
 
 @bot.command()
 async def status_debug(ctx):

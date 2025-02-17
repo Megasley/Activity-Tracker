@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands, tasks
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, time, timezone
 import asyncio
 import gspread
 from google.oauth2.service_account import Credentials
@@ -111,7 +111,7 @@ class StatusTracker(commands.Bot):
         return f"{int(remaining_minutes)}m"
     
 
-    @tasks.loop(time=time(hour=23, minute=59))  # Run at 23:59 every day
+    @tasks.loop(time=time(hour=23, minute=59, tzinfo=timezone.utc))  # Run at 23:59 every day
     async def daily_report(self):
         if not REPORT_CHANNEL_ID:
             return
@@ -154,7 +154,7 @@ class StatusTracker(commands.Bot):
                     
                     if minutes > 0:  # Only show users with activity
                         formatted_time = self.format_time(minutes)
-                        report += f"{username}: **{formatted_time}**\n"
+                        report += f"<@{user_id}>: You've spent **{formatted_time}** today\n"
             
             if report == "📊 **Daily Status Report**\n\n":
                 await channel.send("No activity recorded today!")
@@ -169,7 +169,7 @@ class StatusTracker(commands.Bot):
 bot = StatusTracker()
 
 # Add this line to start the daily report task
-bot.daily_report.start()
+# bot.daily_report.start()
 
 @bot.event
 async def on_presence_update(before, after):
@@ -293,6 +293,10 @@ Web Status: {member.web_status}
 Raw Status: {member.raw_status}
 """)
 
+@bot.event
+async def on_ready():
+    print(f'{bot.user} has connected to Discord!')
+    bot.daily_report.start()
 # Run the bot
 if __name__ == "__main__":
     keep_alive()    # Start the keep alive server

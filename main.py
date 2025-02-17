@@ -51,41 +51,8 @@ class StatusTracker(commands.Bot):
         
         # Set report time to 23:59
         self.report_time = time(hour=23, minute=59)
-        
-        # Add a flag to track if update is in progress
-        self.update_in_progress = False
 
-    async def update_active_sessions(self):
-        """Update time for all active sessions"""
-        if self.update_in_progress:
-            return
-            
-        self.update_in_progress = True
-        try:
-            current_time = datetime.now()
-            
-            for user_id, start_time in list(self.active_sessions.items()):
-                try:
-                    # Find the user in the guild
-                    user = None
-                    for guild in self.guilds:
-                        user = guild.get_member(int(user_id))
-                        if user:
-                            break
-                    
-                    if user:
-                        duration_minutes = (current_time - start_time).total_seconds() / 60
-                        await self.update_user_time(user_id, user.name, duration_minutes)
-                        # Update the start time to current time
-                        self.active_sessions[user_id] = current_time
-                        print(f"Updated active session for {user.name}")
-                except Exception as e:
-                    print(f"Error updating session for user {user_id}: {str(e)}")
-                    
-        finally:
-            self.update_in_progress = False
-
-    async def update_user_time(self, user_id, username, duration_minutes):
+    def update_user_time(self, user_id, username, duration_minutes):
         """Update or create user's total time for today"""
         today = datetime.now().date().isoformat()
         
@@ -142,11 +109,7 @@ class StatusTracker(commands.Bot):
         if hours > 0:
             return f"{int(hours)}h {int(remaining_minutes)}m"
         return f"{int(remaining_minutes)}m"
-
-    @tasks.loop(minutes=1)
-    async def periodic_update(self):
-        """Update all active sessions every 1 minutes"""
-        await self.update_active_sessions()
+    
 
     @tasks.loop(time=time(hour=23, minute=59))  # Run at 23:59 every day
     async def daily_report(self):
@@ -157,41 +120,56 @@ class StatusTracker(commands.Bot):
         if not channel:
             return
         
+        # Use the correct date format: YYYY-MM-DD
         today = datetime.now().date().isoformat()
-        all_records = self.tracker_sheet.get_all_records()
+        today_header = f'Total Minutes on {today}'
         
-        # Calculate totals for each user
-        user_totals = {}
-        for record in all_records:
-            if record['Date'] == today:
-                user_id = record['User ID']
-                username = record['Username']
-                minutes = float(record['Total Minutes'])
+        try:
+            # Get today's column
+            headers = self.tracker_sheet.row_values(1)
+            
+            if today_header not in headers:
+                print(f"No column found for header: {today_header}")
+                await channel.send("No activity recorded today!")
+                return
                 
-                if user_id not in user_totals:
-                    user_totals[user_id] = {'username': username, 'total': 0}
-                user_totals[user_id]['total'] += minutes
-        
-        # Generate report
-        report = "📊 **Daily Status Report**\n\n"
-        for user_data in user_totals.values():
-            formatted_time = self.format_time(user_data['total'])
-            report += f"{user_data['username']}: {formatted_time}\n"
-        
-        await channel.send(report)
-
-    @daily_report.before_loop
-    async def before_daily_report(self):
-        """Wait until the bot is ready before starting the daily report loop"""
-        await self.wait_until_ready()
-
-    async def setup_hook(self):
-        print(f"Logged in as {self.user}")
-        self.daily_report.start()
-        self.periodic_update.start()  # Start the periodic update task
+            today_col = headers.index(today_header) + 1
+            
+            # Get all rows
+            all_rows = self.tracker_sheet.get_all_values()
+            
+            report = "📊 **Daily Status Report**\n\n"
+            
+            # Skip header row
+            for row in all_rows[1:]:
+                if len(row) >= today_col:  # Make sure row has today's column
+                    user_id = row[0]
+                    username = row[1]
+                    minutes = float(row[today_col - 1]) if row[today_col - 1] else 0
+                    
+                    # Add current session if user is active
+                    if user_id in self.active_sessions:
+                        current_session = (datetime.now() - self.active_sessions[user_id]).total_seconds() / 60
+                        minutes += current_session
+                    
+                    if minutes > 0:  # Only show users with activity
+                        formatted_time = self.format_time(minutes)
+                        report += f"{username}: **{formatted_time}**\n"
+            
+            if report == "📊 **Daily Status Report**\n\n":
+                await channel.send("No activity recorded today!")
+            else:
+                await channel.send(report)
+            
+        except Exception as e:
+            print(f"Error in daily report: {e}")
+            await channel.send("Error generating daily report!")
 
 # Create bot instance before event handlers
 bot = StatusTracker()
+
+# Add this line to start the daily report task
+bot.daily_report.start()
 
 @bot.event
 async def on_presence_update(before, after):
@@ -214,7 +192,7 @@ async def on_presence_update(before, after):
         if user_id in bot.active_sessions:
             start_time = bot.active_sessions[user_id]
             duration_minutes = (current_time - start_time).total_seconds() / 60
-            await bot.update_user_time(user_id, username, duration_minutes)
+            bot.update_user_time(user_id, username, duration_minutes)
             del bot.active_sessions[user_id]
 
 @bot.command()

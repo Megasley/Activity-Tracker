@@ -26,8 +26,6 @@ class StatusTracker(commands.Bot):
         
         # Initialize Google Sheets connection
         scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-        
-        # Get credentials from environment variable
         credentials_dict = json.loads(os.getenv('GOOGLE_CREDENTIALS'))
         credentials = Credentials.from_service_account_info(credentials_dict, scopes=scopes)
         
@@ -44,13 +42,31 @@ class StatusTracker(commands.Bot):
                 f'Total Minutes on {today}'
             ])
             
-        # Store active sessions in memory
         self.active_sessions = {}
         self.max_retries = 3
-        self.retry_delay = 2  # seconds
-        
-        # Set report time to 23:59
+        self.retry_delay = 2
         self.report_time = time(hour=23, minute=59)
+
+    @tasks.loop(minutes=2)
+    async def periodic_update(self):
+        """Update sheet every 5 minutes for active users"""
+        print("Running periodic update...")
+        current_time = datetime.now()
+        
+        # Create a copy of active_sessions to avoid modification during iteration
+        active_sessions_copy = self.active_sessions.copy()
+        
+        for user_id, start_time in active_sessions_copy.items():
+            try:
+                # Get user from the bot's cache
+                user = self.get_user(int(user_id))
+                if user:
+                    duration_minutes = (current_time - start_time).total_seconds() / 60
+                    self.update_user_time(user_id, user.name, duration_minutes)
+                    # Update the start time to current time for next interval
+                    self.active_sessions[user_id] = current_time
+            except Exception as e:
+                print(f"Error updating user {user_id}: {e}")
 
     def update_user_time(self, user_id, username, duration_minutes):
         """Update or create user's total time for today"""
@@ -59,7 +75,7 @@ class StatusTracker(commands.Bot):
         for attempt in range(self.max_retries):
             try:
                 # Get today's column
-                headers = self.tracker_sheet.row_values(1)  # Get header row
+                headers = self.tracker_sheet.row_values(1)
                 today_header = f'Total Minutes on {today}'
                 
                 # Find or create today's column
@@ -78,12 +94,12 @@ class StatusTracker(commands.Bot):
                     # Get current value and add new minutes
                     current_value = self.tracker_sheet.cell(user_row, today_col).value
                     current_minutes = float(current_value) if current_value and current_value.strip() else 0
-                    new_total = current_minutes + max(1, int(duration_minutes))  # Ensure at least 1 minute
+                    new_total = current_minutes + max(1, int(duration_minutes))
                     
                     # Update the cell
                     self.tracker_sheet.update_cell(user_row, today_col, str(int(new_total)))
                     print(f"Updated {username}'s time: {int(new_total)} minutes (added {int(duration_minutes)})")
-                    return  # Success, exit the function
+                    return
                     
                 except gspread.CellNotFound:
                     # Add new user row
@@ -93,10 +109,10 @@ class StatusTracker(commands.Bot):
                     row_data.append(str(int(max(1, duration_minutes))))
                     self.tracker_sheet.append_row(row_data)
                     print(f"Created new record for {username}: {int(duration_minutes)} minutes")
-                    return  # Success, exit the function
+                    return
                     
             except (ConnectionError, TimeoutError, Exception) as e:
-                if attempt < self.max_retries - 1:  # Don't sleep on last attempt
+                if attempt < self.max_retries - 1:
                     print(f"Attempt {attempt + 1} failed, retrying in {self.retry_delay} seconds...")
                     time_module.sleep(self.retry_delay)
                 else:
@@ -109,10 +125,10 @@ class StatusTracker(commands.Bot):
         if hours > 0:
             return f"{int(hours)}h {int(remaining_minutes)}m"
         return f"{int(remaining_minutes)}m"
-    
 
-    @tasks.loop(time=time(hour=23, minute=59, tzinfo=timezone.utc))  # Run at 23:59 every day
+    @tasks.loop(time=time(hour=16, minute=29, tzinfo=timezone.utc))
     async def daily_report(self):
+        """Generate and send daily report"""
         if not REPORT_CHANNEL_ID:
             return
             
@@ -120,12 +136,10 @@ class StatusTracker(commands.Bot):
         if not channel:
             return
         
-        # Use the correct date format: YYYY-MM-DD
         today = datetime.now().date().isoformat()
         today_header = f'Total Minutes on {today}'
         
         try:
-            # Get today's column
             headers = self.tracker_sheet.row_values(1)
             
             if today_header not in headers:
@@ -134,25 +148,21 @@ class StatusTracker(commands.Bot):
                 return
                 
             today_col = headers.index(today_header) + 1
-            
-            # Get all rows
             all_rows = self.tracker_sheet.get_all_values()
             
             report = "📊 **Daily Status Report**\n\n"
             
-            # Skip header row
             for row in all_rows[1:]:
-                if len(row) >= today_col:  # Make sure row has today's column
+                if len(row) >= today_col:
                     user_id = row[0]
                     username = row[1]
                     minutes = float(row[today_col - 1]) if row[today_col - 1] else 0
                     
-                    # Add current session if user is active
                     if user_id in self.active_sessions:
                         current_session = (datetime.now() - self.active_sessions[user_id]).total_seconds() / 60
                         minutes += current_session
                     
-                    if minutes > 0:  # Only show users with activity
+                    if minutes > 0:
                         formatted_time = self.format_time(minutes)
                         report += f"<@{user_id}>: You've spent **{formatted_time}** today\n"
             
@@ -165,14 +175,12 @@ class StatusTracker(commands.Bot):
             print(f"Error in daily report: {e}")
             await channel.send("Error generating daily report!")
 
-# Create bot instance before event handlers
+# Create bot instance
 bot = StatusTracker()
-
-# Add this line to start the daily report task
-# bot.daily_report.start()
 
 @bot.event
 async def on_presence_update(before, after):
+    """Handle user presence updates"""
     print(f"Presence update detected for {after.name}")
     
     user_id = str(after.id)
@@ -197,12 +205,11 @@ async def on_presence_update(before, after):
 
 @bot.command()
 async def mystatus(ctx):
-    """Command to check your current status statistics"""
+    """Command to check user's current status statistics"""
     user_id = str(ctx.author.id)
     today = datetime.now().date().isoformat()
     
     try:
-        # Get today's column
         headers = bot.tracker_sheet.row_values(1)
         today_header = f'Total Minutes on {today}'
         
@@ -212,16 +219,13 @@ async def mystatus(ctx):
             
         today_col = headers.index(today_header) + 1
         
-        # Find user's row
         try:
             cell = bot.tracker_sheet.find(user_id)
             user_row = cell.row
             
-            # Get current total
             current_value = bot.tracker_sheet.cell(user_row, today_col).value
             total_minutes = float(current_value) if current_value else 0
             
-            # Add current session if user is active
             if user_id in bot.active_sessions:
                 current_session_minutes = (datetime.now() - bot.active_sessions[user_id]).total_seconds() / 60
                 total_minutes += current_session_minutes
@@ -239,11 +243,10 @@ async def mystatus(ctx):
 
 @bot.command()
 async def teamreport(ctx):
-    """Generate a status report immediately"""
+    """Generate an immediate status report"""
     today = datetime.now().date().isoformat()
     
     try:
-        # Get today's column
         headers = bot.tracker_sheet.row_values(1)
         today_header = f'Total Minutes on {today}'
         
@@ -252,25 +255,21 @@ async def teamreport(ctx):
             return
             
         today_col = headers.index(today_header) + 1
-        
-        # Get all rows
         all_rows = bot.tracker_sheet.get_all_values()
         
         report = "📊 **Current Status Report**\n\n"
         
-        # Skip header row
         for row in all_rows[1:]:
-            if len(row) >= today_col:  # Make sure row has today's column
+            if len(row) >= today_col:
                 user_id = row[0]
                 username = row[1]
                 minutes = float(row[today_col - 1]) if row[today_col - 1] else 0
                 
-                # Add current session if user is active
                 if user_id in bot.active_sessions:
                     current_session = (datetime.now() - bot.active_sessions[user_id]).total_seconds() / 60
                     minutes += current_session
                 
-                if minutes > 0:  # Only show users with activity
+                if minutes > 0:
                     formatted_time = bot.format_time(minutes)
                     report += f"<@{user_id}>: You spent **{formatted_time}** online today\n"
         
@@ -295,8 +294,11 @@ Raw Status: {member.raw_status}
 
 @bot.event
 async def on_ready():
+    """Handle bot startup"""
     print(f'{bot.user} has connected to Discord!')
     bot.daily_report.start()
+    bot.periodic_update.start()  # Start the periodic update task
+
 # Run the bot
 if __name__ == "__main__":
     keep_alive()    # Start the keep alive server

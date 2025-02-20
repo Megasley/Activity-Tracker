@@ -126,7 +126,7 @@ class StatusTracker(commands.Bot):
             return f"{int(hours)}h {int(remaining_minutes)}m"
         return f"{int(remaining_minutes)}m"
 
-    @tasks.loop(time=time(hour=16, minute=29, tzinfo=timezone.utc))
+    @tasks.loop(time=time(hour=23, minute=59, tzinfo=timezone.utc))
     async def daily_report(self):
         """Generate and send daily report"""
         if not REPORT_CHANNEL_ID:
